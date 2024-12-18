@@ -30,67 +30,36 @@ if uploaded_file:
     data['Prompt'] = data['Prompt'].fillna("MISSING PROMPT").astype(str)
 
     # User choice for similarity method
-    use_embeddings = st.radio(
+    use_method = st.radio(
         "Select similarity calculation method:",
-        ("Embeddings (more accurate, slower)", "TF-IDF (faster)", "Jaccard Similarity"),
+        ("Embeddings", "TF-IDF", "Jaccard Similarity", "All Methods"),
     )
 
-    # Show a brief description of the selected method
-    if use_embeddings == "Embeddings (more accurate, slower)":
-        st.info("Embeddings use the pre-trained model 'all-MiniLM-L6-v2' to generate dense vector representations of text, capturing semantic meaning. This method is slower but more accurate.")
-    elif use_embeddings == "TF-IDF (faster)":
-        st.info("TF-IDF computes term frequency-inverse document frequency to represent text and measure similarity. It is faster but less nuanced.")
-    else:
-        st.info("Jaccard Similarity measures the overlap between sets of tokens in text. It is simple and interpretable but less precise for complex language.")
+    st.info("The 'All Methods' option runs all three similarity calculations and adds separate columns to the output file.")
 
     # Add a start button
     if st.button("Start Calculation"):
-        # Add a progress bar
         progress_bar = st.progress(0)
-
-        # Add a log container (embedded scrolling window)
         log_container = st.empty()  # Placeholder for logs
-        MAX_LOG_LINES = 5  # Limit the log messages to the last 5 updates
+        MAX_LOG_LINES = 5  # Keep only the latest logs
 
-        # Calculate similarity scores
-        def calculate_similarity(data, use_embeddings):
-            prompts = data['Prompt']
-            log_messages = []  # Store log messages
-
-            if use_embeddings == "Embeddings (more accurate, slower)":
-                # Use sentence embeddings
+        # Function to calculate similarity
+        def calculate_similarity(prompts, method):
+            log_messages = []
+            if method == "Embeddings":
+                log_messages.append("Generating embeddings...")
                 model = SentenceTransformer('all-MiniLM-L6-v2', device='cpu')
-                log_messages.append("Starting embedding generation...")
-                log_container.markdown("### Logs:\n" + "\n".join(log_messages))
-
-                # Generate embeddings for all prompts in a single batch
-                for idx, prompt in enumerate(prompts):
-                    # Simulate generating embedding (update for each prompt)
-                    embedding = model.encode([prompt], convert_to_tensor=True)
-                    
-                    # Log progress
-                    log_message = f"Processed {idx + 1}/{len(prompts)} prompts."
-                    log_messages.append(log_message)
-                    log_messages = log_messages[-MAX_LOG_LINES:]  # Keep only the latest logs
-                    
-                    # Update log container
-                    log_container.markdown("### Logs:\n" + "\n".join(log_messages))
-                    time.sleep(0.05)  # Simulate time delay for display
-
-                # Generate all embeddings as a batch
                 embeddings = model.encode(prompts, convert_to_tensor=True)
-
-                # Compute similarity matrix
                 similarity_matrix = util.pytorch_cos_sim(embeddings, embeddings).numpy()
-
-            elif use_embeddings == "TF-IDF (faster)":
-                # Use TF-IDF
+                log_messages.append("Embeddings similarity calculation completed.")
+            elif method == "TF-IDF":
+                log_messages.append("Calculating TF-IDF similarity...")
                 vectorizer = TfidfVectorizer()
                 tfidf_matrix = vectorizer.fit_transform(prompts)
                 similarity_matrix = cosine_similarity(tfidf_matrix)
-
-            else:
-                # Use Jaccard Similarity
+                log_messages.append("TF-IDF similarity calculation completed.")
+            elif method == "Jaccard Similarity":
+                log_messages.append("Calculating Jaccard similarity...")
                 mlb = MultiLabelBinarizer()
                 tokenized_prompts = [set(prompt.split()) for prompt in prompts]
                 binary_matrix = mlb.fit_transform(tokenized_prompts)
@@ -98,26 +67,42 @@ if uploaded_file:
                     [jaccard_score(binary_matrix[i], binary_matrix[j]) for j in range(len(binary_matrix))]
                     for i in range(len(binary_matrix))
                 ]
+                log_messages.append("Jaccard similarity calculation completed.")
+            else:
+                return []
 
-            # Get similarity scores for each prompt (excluding self-comparison)
+            # Calculate scores
             scores = []
             for i, row in enumerate(similarity_matrix):
-                row[i] = 0  # Ignore self-comparison
+                row[i] = 0  # Exclude self-comparison
                 max_similarity = max(row)
-                scores.append(max_similarity * 100)  # Convert to percentage
-
-                # Update progress bar
-                progress_bar.progress(int((i + 1) / len(similarity_matrix) * 100))
-
+                scores.append(max_similarity * 100)
+                # Update progress bar and logs
+                progress_bar.progress(int((i + 1) / len(prompts) * 100))
+                log_message = f"Processed row {i + 1}/{len(prompts)} for {method}."
+                log_messages.append(log_message)
+                log_messages = log_messages[-MAX_LOG_LINES:]  # Keep recent logs
+                log_container.markdown("### Logs:\n" + "\n".join(log_messages))
+                time.sleep(0.05)  # Smooth UI refresh
             return scores
 
-        # Compute the similarity scores
-        data['Similarity Score (%)'] = calculate_similarity(data, use_embeddings)
+        prompts = data['Prompt']
+
+        # Run selected method(s)
+        if use_method == "All Methods":
+            st.info("Running all methods: Embeddings, TF-IDF, and Jaccard Similarity.")
+            data['Embeddings Score (%)'] = calculate_similarity(prompts, "Embeddings")
+            data['TF-IDF Score (%)'] = calculate_similarity(prompts, "TF-IDF")
+            data['Jaccard Score (%)'] = calculate_similarity(prompts, "Jaccard Similarity")
+        else:
+            method_name = use_method.split()[0]
+            column_name = f"{method_name} Score (%)"
+            data[column_name] = calculate_similarity(prompts, use_method)
 
         # Display the results
         st.write("Similarity scores:", data)
 
-        # Allow the user to download the results
+        # Allow user to download results
         @st.cache_data
         def convert_df(df):
             return df.to_csv(index=False).encode('utf-8')
